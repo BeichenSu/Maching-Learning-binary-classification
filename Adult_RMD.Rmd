@@ -1,0 +1,1085 @@
+---
+title: "Adult Data exploration wich AWS EC2-HW4"
+author: "Beichen Su"
+date: "5/29/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Introduction
+The data source is found on UCI Machine Learning data sets, called Adult: http://archive.ics.uci.edu/ml/machine-learning-databases/adult/
+
+## 1.1 Summary and task 
+The data contains 48842 observations of 15 variable for each person in the survey. The task is using 14 of them as predictors and determining whether a person's income is greater than 50k per year.
+
+## Notice!
+1 will represent >50K and 0 will represent <=50k in the further models, as the study focus on predicting people with income >50k per year and the roc curve stands for true positive rate and false positive rate.
+
+
+## 1.2 Attributes
+There is actually no conflict between those attributes, every kind of combination could exist so I don't think it's necessary to dive a lot in to those attributes.
+
+For detailed information of each predictor, you can refer following:
+
+age: continuous.
+
+workclass: Private, Self-emp-not-inc, Self-emp-inc, Federal-gov, Local-gov, State-gov, Without-pay, Never-worked.
+
+fnlwgt: continuous.
+
+education: Bachelors, Some-college, 11th, HS-grad, Prof-school, Assoc-acdm, Assoc-voc, 9th, 7th-8th, 12th, Masters, 1st-4th, 10th, Doctorate, 5th-6th, Preschool.
+
+education-num: continuous.
+
+marital-status: Married-civ-spouse, Divorced, Never-married, Separated, Widowed, Married-spouse-absent, Married-AF-spouse.
+
+occupation: Tech-support, Craft-repair, Other-service, Sales, Exec-managerial, Prof-specialty, Handlers-cleaners, Machine-op-inspct, Adm-clerical, Farming-fishing, Transport-moving, Priv-house-serv, Protective-serv, Armed-Forces.
+
+relationship: Wife, Own-child, Husband, Not-in-family, Other-relative, Unmarried.
+
+race: White, Asian-Pac-Islander, Amer-Indian-Eskimo, Other, Black.
+
+sex: Female, Male.
+
+capital-gain: continuous.
+
+capital-loss: continuous.
+
+hours-per-week: continuous.
+
+native-country: United-States, Cambodia, England, Puerto-Rico, Canada, Germany, Outlying-US(Guam-USVI-etc), India, Japan, Greece, South, China, Cuba, Iran, Honduras, Philippines, Italy, Poland, Jamaica, Vietnam, Mexico, Portugal, Ireland, France, Dominican-Republic, Laos, Ecuador, Taiwan, Haiti, Columbia, Hungary, Guatemala, Nicaragua, Scotland, Thailand, Yugoslavia, El-Salvador, Trinadad&Tobago, Peru, Hong, Holand-Netherlands.
+
+## 1.3 Data input and preparation
+
+The initial data consists of two parts, one trainning and one test data set. For data clean and set up purpose, I prefer to combine the data first.
+
+```{r data import, include=FALSE}
+library(readr)
+library(h2o)
+library(ggplot2)
+options(warn=-1)
+setwd("~/STAT418")
+data1 = read_csv("adult.csv", col_names = FALSE)
+data2 = read_csv("adult_test.csv", col_names = FALSE)
+originalData = rbind(data1,data2)
+rm(data1,data2)
+cols = c("age",
+         "workclass", 
+         "fnlwgt", 
+         "education",
+         "education_num", 
+         "marital_status",
+         "occupation",
+         "relationship",
+         "race",
+         "sex",
+         "capital_gain",
+         "capital_loss",
+         "hours_per_week",
+         "native_country",
+         "income"
+         )
+colnames(originalData) = cols
+```
+Check if there's any NA in the data
+```{r check NA, echo=FALSE}
+sapply(originalData, function(x) sum(is.na(x)))
+```
+The result shows that there is no NA in the data, which suggests there is no missing value or the missing value is represented in a different way for character input. It's important to check unique values in each string attributes.
+
+```{r unique value}
+unique(originalData$workclass)
+unique(originalData$education)
+unique(originalData$marital_status)
+unique(originalData$occupation)
+unique(originalData$relationship)
+unique(originalData$race)
+unique(originalData$sex)
+unique(originalData$native_country)
+unique(originalData$income)
+```
+The pattern shows that the missing values in the character attributes are represented by "?" and there are two version of the income representation, with "." or without ".".
+
+### 1.3.1 Delete the row with missing value
+The missing value brings in confusion to further analysis, as we might have no idea about what "?" representing, I prefer to delete all rows with "?" from the data set, if this operation will not delete the whole data set luckily.
+```{r remove missing}
+originalData = originalData[-which(originalData$workclass == "?"),] 
+originalData = originalData[-which(originalData$occupation == "?"),] 
+originalData = originalData[-which(originalData$native_country == "?"),] 
+dim(originalData)
+```
+Now there are 45222 observation remaining, which indicates that we lost 3620 observation but the outcome is not too bad, that only 7.4% rows contain missing value.
+
+### 1.3.2 Regulation of the income representation
+In this section I convert both "<=50k" and "<=50k." to "<=50k",
+
+and ">50k" and ">50k." to ">50k" for regulation.
+```{r convert income, include=FALSE}
+index0 = which(originalData$income == "<=50K"| originalData$income == "<=50K.")
+index1 = which(originalData$income == ">50K"| originalData$income == ">50K.")
+length(index0)+length(index1) == nrow(originalData)
+originalData$income[index0] = "<=50K"
+originalData$income[index1] = ">50K"
+table(originalData$income)
+```
+```{r}
+dim(originalData)
+```
+
+For those 45222 observation, the data contains 34014 observation marked as the income is less than or equal to 50k per year and 11208 for greater than 50k per year.
+
+Then making the string predictors as factors
+```{r factorize, echo = FALSE}
+factor_col = c("workclass", 
+         "education",
+         "marital_status",
+         "occupation",
+         "relationship",
+         "race",
+         "sex",
+         "native_country",
+         "income"
+         )
+originalData[factor_col] = lapply(originalData[factor_col], factor)
+```
+
+
+
+## 1.4 Graphical presentation of the data
+Severl plot of predictors and income will be presented below in order to discover the trend and what makes a difference for annul income greater than 50k.
+
+### 1.4.1 Age
+```{r age, message=FALSE, echo=FALSE}
+qplot(age, data = originalData, geom = "density", color = income)
+```
+
+
+It's obvious to see that as the age increases, people are more likely to have higher income.
+
+### 1.4.2 Final weight
+```{r fnlwgt, echo=FALSE}
+qplot(fnlwgt, data = originalData, geom = "density", color = income)
+```
+
+This final weight attributes doesn't seem to play an important role for the binary classification.
+
+### 1.4.3 Education Number
+```{r edu num, echo=FALSE}
+qplot(education_num, data = originalData, geom = "density", color = income)
+```
+
+This graph brings in a lot of information.
+
+As for those make more than 50k per year, almost everyone has at least 8 years of education history, and more than have of them have more than 12 years of education.
+
+For those make equal or less than 50k per year, most of them have 9 or 10 years of education background. What this graph suggests is that, receiving longer education might let you make more money, but the difference is not distinct.
+
+It's might be interesting to check their education degree for the next part, degree and education number are closely connected.
+
+### 1.4.4 Education Degree
+```{r degree,fig.width=6, fig.height=14, echo=FALSE}
+qplot(income, data = originalData, facets = education ~., color = education_num)
+```
+
+As there are more people have less or equal to 50k per year, it's not surperising that for most kinds of degree, the number with <=50k is greater than >50k. But it's necessary to notice that for prof-school, master, and doctorate, there are more >50k.
+
+
+### 1.4.5 Marital status
+```{r marital, fig.width = 16, echo=FALSE}
+qplot(marital_status, data = originalData, fill = income)
+```
+
+Still, as there are more people with <=50k income, the status "married-civ-spouse" might bring in more income as the graph suggests.
+
+### 1.4.6 Occupation
+```{r occupation, fig.width= 14, echo=FALSE}
+qplot(occupation, data = originalData, fill = income)
+```
+
+The graph suggests that exec-managerial and prof-specialty brings in more income.
+
+### 1.4.7 Work class
+```{r work class, fig.width=10, echo=FALSE}
+qplot(workclass, data = originalData, fill = income)
+```
+
+The private and self-emplyed-inc workclass might have more probability of more than 50k income compared to others.
+
+### 1.4.8 Race and Sex
+```{r race and sex, fig.width= 8, echo=FALSE}
+qplot(race, facets = .~ sex, data = originalData, fill = income)
+```
+
+For both male and female, it looks like that white people have the greater probalibity to have more than 50k income. And male have the greater probalibity to have more than 50k income generally.
+
+### 1.4.9 Capital gain and loss
+```{r capital, message=FALSE, echo=FALSE}
+qplot(capital_gain, data = originalData, fill = income)
+qplot(capital_loss, data = originalData, fill = income)
+```
+
+For both gain and loss, most of them have score 0, but people with income greater than 50k per year, the scores are higher in both cases.
+
+### 1.4.10 Native country
+```{r country, echo=FALSE}
+tab = table(originalData$native_country,originalData$income)
+sort(tab[,2]/sum(tab[,1]+tab[,2]) * 100,decreasing = TRUE)
+```
+
+This table give the percentage of people with >50 income in the data for each country from high to low, and the United States has the greatest percentage, which might suggest that the people with naive country of the United States would have the greatest probability to have more than 50k income per year.
+
+# 2. Statistical model and analysis
+In this section, seveal machine learning models would be employed, in order to do comparison and better prediction. And models in the last course work will be reviewed, as a summary to the whole project.
+
+The analysis will mainly based on H2O, and auc will be used as the mectric of goodness. ROC curve and analysis will be provided for each model.
+
+For regulation, I set ">50k" as 1 and "<=50k" as 0 for income, as the study is focus on predict people with >50k income and the roc curve stands for true positive rate and false positive rate.
+
+The whole script is running on an Amazon EC2 t2.2xlarge instance on Ubantu system with 8 core and 32 GB memory.
+
+```{r, include = FALSE}
+originalData$income = as.character(originalData$income)
+index0 = which(originalData$income == "<=50K")
+index1 = which(originalData$income == ">50K")
+originalData$income[index0] = 0
+originalData$income[index1] = 1
+originalData$income = as.factor(originalData$income)
+```
+
+For the validation purpose, the whole data would be divided into training, validation and test set(60%, 20%, 20%) at random. As H2O provided build in function for validation, the validation set is omitted.
+```{r seperate sets, include=FALSE}
+trainSize = floor(0.6*nrow(originalData))
+trainInd = sample(1:nrow(originalData),trainSize)
+trainSet = originalData[trainInd,]
+NtrainSet = originalData[-trainInd,]
+vSize = floor(0.5*nrow(NtrainSet))
+vInd = sample(1:nrow(NtrainSet),vSize)
+vSet = NtrainSet[vInd,]
+testSet = NtrainSet[-vInd,]
+write.csv(originalData, file = "mydata.csv", row.names = FALSE)
+```
+
+
+## 2.1 Logistic Regression (Review)
+```{r logistic regression, include=FALSE}
+# For reproducibility
+set.seed(12) 
+# initialize h2o
+h2o.init(nthreads = -1, max_mem_size = "20G")
+h2o.removeAll()
+# import file to h2o
+dx = h2o.importFile("mydata.csv") 
+# Seperate training, validation, and test set in h2o
+dx$income = h2o.asfactor(dx$income)
+dx_split = h2o.splitFrame(dx, ratios = 0.6, seed = 12)
+dx_train = dx_split[[1]]
+dx_Ntrain = dx_split[[2]]
+dx_split2 = h2o.splitFrame(dx_Ntrain, ratios = 0.5, seed = 12)
+dx_test = dx_split2[[1]]
+dx_valid = dx_split2[[2]]
+# Employ logistic regression with lasso regulation 
+# and use the validation set to pick the best lambda
+Xnames = names(dx_train)[which(names(dx_train)!="income")]
+
+time_logit = system.time({
+  model_logit = h2o.glm(Xnames, "income", training_frame = dx_train, alpha = 1, lambda_search = TRUE, validation_frame = dx_valid, family = "binomial", seed = 12)
+  })
+```
+
+Here's the summary of the logistic regression model with best lambda.
+
+The training auc is 
+```{r, echo=FALSE}
+h2o.auc(h2o.performance(model_logit))
+```
+The validation auc is 
+```{r, echo = FALSE}
+h2o.auc(h2o.performance(model_logit, valid = TRUE))
+```
+And the best lambda is given as:
+```{r best lambda, echo=FALSE}
+model_logit@model$lambda_best
+```
+The prediction auc on test set and roc curve is given below.
+```{r logit test, echo=FALSE}
+auc_logit = h2o.auc(h2o.performance(model_logit,dx_test))
+auc_logit
+plot(h2o.performance(model_logit,dx_test))
+```
+
+The tuning on lambda suggests we should pick a value close to 0, and the auc given by training, validation and test set are all above 0.9, which shows that the overtraining is avoided and the model fits pretty good.
+
+The roc curve provides a insight of trade off between TPR and FPR based on the cutoff point. 
+
+As the focus is on predicting people with >50k income, it's reasonable to choose max f2 as a criterion, which stands for 1 in this case. The confusion matrix of training data is given. 
+```{r, echo = FALSE}
+h2o.confusionMatrix(model_logit, metrics = c("f2"))
+```
+For training data, to obtain the best TPR and FPR, the cutoff point is given by 0.14645.
+
+The confusion matrix of validation data:
+```{r, echo = FALSE}
+h2o.confusionMatrix(model_logit, newdata = dx_valid, metrics = c("f2"))
+```
+For validation data, to obtain the best TPR and FPR, the cutoff point is given by 0.18429.
+
+Choosing cutoff point at 0.18429 yields 9.5% error on predicting people with >50k income for the validation data. 
+And for the test data
+```{r, echo = FALSE, message=FALSE}
+h2o.confusionMatrix(model_logit, newdata = dx_test, metrics = c("f2"))
+```
+The cut point at 0.1382 gives 8.24% error and 91.76% accuracy on predicting people with >50k income for the test data.
+
+So that the threshold can be picked for different data based on the model, in order to gain better prediction for >50k or <=50k.
+
+This result is reliable and more trade off can be found on H2O flow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 2.2 Random forest (Review)
+The random forest algorithm is employed with H2O implementation. The validation set is used with early stopping technique, with stopping round at 4, stopping tolerance at 0.01 and stopping metric of AUC.
+
+```{r random forest, include=FALSE}
+time_RF = system.time({
+    model_RF = h2o.randomForest(x = Xnames, y = "income", training_frame = dx_train, 
+                         validation_frame = dx_valid, stopping_metric = "AUC", 
+                         stopping_rounds = 4, stopping_tolerance = 0.01, ntrees = 500, seed = 12)
+  })
+```
+
+The random forest model gives training auc at:
+```{r, echo=FALSE}
+h2o.auc(h2o.performance(model_RF))
+```
+And validation auc at:
+```{r, echo=FALSE}
+h2o.auc(h2o.performance(model_RF,valid = TRUE))
+```
+And test auc at:
+```{r, echo=FALSE}
+auc_RF = h2o.auc(h2o.performance(model_RF,dx_test))
+auc_RF
+```
+The optimal tree number to avoid overtraining is:
+```{r,echo=FALSE, message=FALSE}
+score = model_RF@model$scoring_history
+score = score[,c("number_of_trees","training_auc","validation_auc")]
+max(score$number_of_trees)
+```
+And the auc for training and validation sets as the number of trees grows is given by:
+```{r, echo=FALSE, message=FALSE}
+ggplot(data = score, aes(x = number_of_trees)) +
+  geom_line(aes(y = training_auc, colour = "training_auc")) +
+  geom_line(aes(y = validation_auc, colour = "validation_auc")) +
+  scale_colour_manual("", 
+                      breaks = c("training_auc", "validation_auc"),
+                      values = c("red", "green")) +
+  xlab("Number of trees") +
+  scale_y_continuous("AUC", limits = c(0.75,0.95)) + 
+  labs(title="AUC for training and validation")
+```
+
+The AUC stopped to increase as the number of trees equal to 11, so that the model stopped here to avoid overtraining.
+
+With the roc curve on test set:
+```{r}
+plot(h2o.performance(model_RF,dx_test))
+```
+
+Generally speaking, the auc for training, validation and test sets are all around 0.9, and this metric is a little bit lower for the training set based on the seed I set for reproducibility.
+
+Below I produced the best cut off point for TPR and FPR, along with the confusion matrix at the cutoff point.
+
+For training set
+```{r, echo=FALSE}
+h2o.confusionMatrix(model_RF, metrics = "f2")
+```
+The optimal cut off point to gain best TPR and FPR as a trade off is given by 0.111. And this yields TPR at
+```{r,echo=FALSE}
+1-0.082637
+```
+and FPR at 
+```{r, echo=FALSE}
+0.325107
+```
+This cut off points is pretty low, producing a nice true positive rate, which means for those people really have >50k income, the model predicts with 0.917363 accuracy.
+
+But for those people actually have <=50k income, as the model trends to emphasize the prediction power on >50k income so that the cut off point is pretty small and close to 0, the model assigns 32.5% of <=50 to >50 by mistake.
+
+For the validation set:
+```{r, echo=FALSE}
+h2o.confusionMatrix(model_RF, newdata = dx_valid, metrics = "f2")
+```
+
+The optimal cut off point for the validation data is at 0.20812.
+
+And for the test data, the confusion matrix is given by:
+```{r, echo = FALSE}
+h2o.confusionMatrix(model_RF, newdata = dx_test, metrics = "f2")
+```
+And it reports that picking a cut off point at 0.1382 would be optimal to predict people with >50k income, for which 1 stands. 
+As the confusion matrix can tell, for those people really have >50k income, the model gives a prediction at 92.9% accuracy, which is pretty nice result and a little bit better compared to logistic regression.
+
+
+
+
+
+
+
+
+
+## 2.3 Gradient boosting machine(Review)
+For the GBM section, H2O is employed with early stopping technique for time saving and avoiding over-tranining.
+
+Several model with different learning ratio is introduced with different learning ratio. 
+
+Those models begin with 600 tree which is way more than enough, stopping rounds = 3, stopping tolerance = 0.01, and max depth = 100 which gives enough room for tree to grow.
+
+### No.1 GBM model, with learning ratio 0.01
+```{r, include=FALSE}
+time_GBM1 = system.time({
+  model_GBM1 = h2o.gbm(x = Xnames, y = "income", training_frame = dx_train, 
+                 validation_frame = dx_valid, distribution = "bernoulli", 
+                ntrees = 600, max_depth = 100, learn_rate = 0.01, nbins = 100, seed = 12, 
+                stopping_metric = "AUC", stopping_rounds = 3, stopping_tolerance = 0.01)    
+})
+```
+
+The AUC change with the number of tree for training and validation set is given by
+```{r, echo=FALSE, message=FALSE}
+score = model_GBM1@model$scoring_history
+score = score[,c("number_of_trees","training_auc","validation_auc")]
+ggplot(data = score, aes(x = number_of_trees)) +
+  geom_line(aes(y = training_auc, colour = "training_auc")) +
+  geom_line(aes(y = validation_auc, colour = "validation_auc")) +
+  scale_colour_manual("", 
+                      breaks = c("training_auc", "validation_auc"),
+                      values = c("red", "green")) +
+  xlab("Number of trees") +
+  scale_y_continuous("AUC", limits = c(0.45,0.99)) + 
+  labs(title="AUC for training and validation for model 1")
+```
+
+And he optimal number of trees to avoid overtraining with early stopping is given by
+```{r, echo=FALSE}
+max(score$number_of_trees)
+```
+And the mean depth of the trees in the model is :
+```{r, echo=FALSE}
+model_GBM1@model$model_summary$mean_depth
+```
+
+
+The training auc:
+```{r,echo=FALSE}
+h2o.auc(h2o.performance(model_GBM1))
+```
+The confusion matrix for training set at maximum accuracy predicting people with >50k income
+```{r,echo = FALSE}
+h2o.confusionMatrix(h2o.performance(model_GBM1), metrics = "f2")
+```
+This threshold gives TPR at 1-0.031532 = 0.968468 and FPR at 0.211365
+
+The validation auc:
+```{r,echo=FALSE}
+h2o.auc(h2o.performance(model_GBM1,newdata = dx_valid))
+```
+The confusion matrix for validation set at maximum accuracy predicting people with >50k income
+```{r,echo = FALSE}
+h2o.confusionMatrix(h2o.performance(model_GBM1, newdata = dx_valid), metrics = "f2")
+```
+This threshold gives TPR at 1-0.108516 = 0.891484 and FPR at 0.312.
+
+The training set fits better than validation set, with more auc which results in higher TPR and lower FPR with best threshold/cutoff we can choose.
+
+Now apply the model to the test data set.
+
+The auc of the first GBM model on test data:
+```{r, echo=FALSE}
+auc_GBM1 = h2o.auc(h2o.performance(model_GBM1,newdata = dx_test))
+auc_GBM1
+```
+And the ROC curve:
+
+```{r, echo=FALSE}
+plot(h2o.performance(model_GBM1,newdata = dx_test))
+```
+
+Now the confusion matrix with best f2 metric
+```{r,echo = FALSE}
+h2o.confusionMatrix(h2o.performance(model_GBM1, newdata = dx_test), metrics = "f2")
+```
+
+As observed a huge break on the roc curve, it suggests that there is a threshold after which almost every observation will be classified as >50k.
+
+The best cutoff for the test data, given by the confusion matrix is at 0.23869, which gives a TPR at 0.89634 and FPR at 0.32. 
+
+As the validation set and test set have less auc compared to the training data, I think there might still be overtraining in this model. But this can be a result of the learning ratio. So I adjust the learning ratio to 0.1 in the second GBM model.
+
+
+### No.2 GBM model, with learning ratio 0.5
+
+```{r, include=FALSE}
+time_GBM2 = system.time({
+  model_GBM2 = h2o.gbm(x = Xnames, y = "income", training_frame = dx_train, 
+                 validation_frame = dx_valid, distribution = "bernoulli", 
+                ntrees = 600, max_depth = 100, learn_rate = 0.1, nbins = 100, seed = 12, 
+                stopping_metric = "AUC", stopping_rounds = 3, stopping_tolerance = 0.01)    
+})
+```
+
+```{r, echo=FALSE, message=FALSE}
+score = model_GBM2@model$scoring_history
+score = score[,c("number_of_trees","training_auc","validation_auc")]
+ggplot(data = score, aes(x = number_of_trees)) +
+  geom_line(aes(y = training_auc, colour = "training_auc")) +
+  geom_line(aes(y = validation_auc, colour = "validation_auc")) +
+  scale_colour_manual("", 
+                      breaks = c("training_auc", "validation_auc"),
+                      values = c("red", "green")) +
+  xlab("Number of trees") +
+  scale_y_continuous("AUC", limits = c(0.45,0.99)) + 
+  labs(title="AUC for training and validation for model 2")
+```
+
+As the graph can tell, the training auc is much better than that of the validation set again.
+
+With learning ratio 0.1, the optimal number of tree:
+```{r,echo=FALSE}
+max(score$number_of_trees)
+```
+And the mean depth of the trees
+```{r}
+model_GBM2@model$model_summary$mean_depth
+```
+The training auc
+```{r, echo=FALSE}
+h2o.auc(h2o.performance(model_GBM2))
+```
+
+The validation auc
+```{r, echo=FALSE}
+h2o.auc(h2o.performance(model_GBM2,newdata = dx_valid))
+```
+The test auc
+```{r, echo=FALSE}
+auc_GBM2 = h2o.auc(h2o.performance(model_GBM2,newdata = dx_test))
+auc_GBM2
+```
+
+And the ROC curve
+
+```{r, echo=FALSE}
+plot(h2o.performance(model_GBM2,newdata = dx_test))
+```
+
+Increasing the learning ratio from 0.01 to 0.1 doesn't really change the model a lot, we have one more tree few more mean depth and a little bit increased test auc. As the number and depth of trees can be picked by the model itself, it might be interesting to fit a series of GBM model with different learning ratio and compare the training and validation auc.
+
+### Study on learning ratio with a series of GBM models
+```{r,include=FALSE,message=FALSE}
+LR = c(0.01,0.02,0.05,0.07,0.1,0.2,0.3,0.4,0.5,0.9,1)
+aucTR = c()
+aucV = c()
+aucTE = c()
+for(i in 1 : length(LR)) {
+  md =  h2o.gbm(x = Xnames, y = "income", training_frame = dx_train, 
+                 validation_frame = dx_valid, distribution = "bernoulli", 
+                ntrees = 600, max_depth = 100, learn_rate = LR[i], nbins = 100, seed = 12, 
+                stopping_metric = "AUC", stopping_rounds = 3, stopping_tolerance = 0.01)
+  aucTR[i] = h2o.auc(h2o.performance(md))
+  aucV[i] = h2o.auc(h2o.performance(md,newdata = dx_valid))
+  aucTE[i] = h2o.auc(h2o.performance(md,newdata = dx_test))
+}
+df = data.frame(LR,aucTR,aucV,aucTE)
+```
+```{r,echo=FALSE}
+ggplot(data = df, aes(x = LR)) +
+  geom_line(aes(y = aucTR, colour = "training_auc")) +
+  geom_line(aes(y = aucV, colour = "validation_auc")) +
+  scale_colour_manual("", 
+                      breaks = c("training_auc", "validation_auc"),
+                      values = c("red", "green")) +
+  xlab("Learning Ratio") +
+  scale_y_continuous("AUC", limits = c(0.85,1)) + 
+  labs(title="AUC for training and validation of GBM models with different learning ratio")
+```
+
+
+This graph gives a clear sense of what learning ratio did in the model, where I train the model with learning ratio of 0.01, 0.02, 0.05, 0.07, 0.1, 0.2, 0.3, 0.4, 0.5, 0.9, 1.Small and large value gives really poor, and increasing the learning ratio too much would result in overtraining. So for the best auc on validation set, the learning ratio is:
+```{r,echo=FALSE}
+df$LR[which(df$aucV == max(df$aucV))]
+```
+GBM is extreme good at training, where it gives really high aucs for each model on training data but it's poor on validation set.
+
+### No.3 The revised GBM model with learning ratio at 0.3
+```{r, include=FALSE}
+time_GBM3 = system.time({
+  model_GBM3 = h2o.gbm(x = Xnames, y = "income", training_frame = dx_train, 
+                 validation_frame = dx_valid, distribution = "bernoulli", 
+                ntrees = 600, max_depth = 100, learn_rate = 0.3, nbins = 100, seed = 12, 
+                stopping_metric = "AUC", stopping_rounds = 3, stopping_tolerance = 0.01)    
+})
+
+
+```
+
+This final model has learning ratio of 0.3, the number of trees is given by:
+```{r,echo=FALSE}
+model_GBM3@model$model_summary$number_of_trees
+```
+The test auc:
+```{r,echo=FALSE}
+auc_GBM3 = h2o.auc(h2o.performance(model_GBM3,newdata = dx_test))
+auc_GBM3
+```
+The ROC curve
+
+```{r,echo=FALSE}
+plot(h2o.performance(model_GBM3,newdata = dx_test))
+```
+
+The confusion matrix for the test set
+```{r, echo=FALSE}
+h2o.confusionMatrix(h2o.performance(model_GBM3,newdata = dx_test),metrics = "f2")
+```
+
+This final GBM model with learning ratio at 0.3 gives the highest test auc compared to the first two models. 
+
+As the best cut off point for predicting the people with >50k income, the threshold is given by 0.08179. This yields a TPR at 1-0.07096 = 0.929 and FPR at 0.326, which is not a too bad result.
+
+
+### Hyperparameter optimization for GBMs with random search
+
+In this section, the random search method will be employed in order to select the best hyperparameter, including max_depth, minimum number of rows, learning rate, learning rate annealing, sample rate of columns and number of bins.
+
+Early stopping method is employed for each model with AUC as metric and tolerance at 1e-3.
+
+The maximum number of models is 50 and the maximum run time is 3 mins.
+```{r,include=FALSE}
+hyper_params = list( ntrees = 600,  ## early stopping
+                     max_depth = 10:40, 
+                     min_rows = c(1,3,10,30,100),
+                     learn_rate = c(0.01,0.02,0.05,0.07,0.1,0.2,0.3,0.4,0.5,0.9,1),  
+                     learn_rate_annealing = c(0.99,0.995,1,1),
+                     sample_rate = c(0.4,0.7,1,1),
+                     col_sample_rate = c(0.7,1,1),
+                     nbins = c(30,100,300),
+                     nbins_cats = c(64,256,1024)
+)
+
+search_criteria = list( strategy = "RandomDiscrete",
+                        max_runtime_secs = 3*60,
+                        max_models = 50
+)
+
+time_RandomSearch = system.time({
+  mds = h2o.grid(algorithm = "gbm", grid_id = "grd",
+                 x = Xnames, y = "income", training_frame = dx_train,
+                 validation_frame = dx_valid,
+                 hyper_params = hyper_params,
+                 search_criteria = search_criteria,
+                 stopping_metric = "AUC", stopping_tolerance = 1e-3, stopping_rounds = 2,
+                 seed = 123)
+})
+
+mds_sort = h2o.getGrid(grid_id = "grd", sort_by = "auc", decreasing = TRUE)
+model_bestGBM = h2o.getModel(mds_sort@model_ids[[1]])
+```
+
+
+It took a while for the model to run, and the run time is given as 
+
+```{r,echo=FALSE}
+time_RandomSearch
+plot(model_bestGBM)
+```
+
+
+#### The model with the best auc for training and validation sets:
+
+```{r,echo=FALSE}
+summary(model_bestGBM)
+```
+#### The hyperparameter of this model is given by:
+
+```{r,echo=FALSE}
+model_bestGBM@allparameters
+```
+
+With the random-searched hyperparameter, let's check out the performance of this model on the test set. The ROC curve and auc on the test data is given by:
+
+```{r,echo=FALSE}
+plot(h2o.performance(model_bestGBM,dx_test))
+auc_GBMbest = h2o.auc(h2o.performance(model_bestGBM, dx_test))
+auc_GBMbest
+```
+
+With the random-searched hyperparameter, the auc reached 0.919, which is an amazing boost from other models so far. And the hyperparameters for this model are given as 9 trees, max depth = 10, learning rate = 0.4, learn_rate_annealing = 0.995, sample_rate = 1, col_sample_rate = 1, nbins = 100, nbins_cats = 256.
+
+
+
+
+## 2.4 Neural networks
+In this section, several Neural network models with different parameters will be built. The validation set will be employed is order to apply early stopping technique.
+
+For there would be a lot of model, for each neural network model I will only display the ROC curve, auc, best cut off point for predicting people with >50k income(f2 measure) and the run time.
+
+For reproducibility, the seed is set at 123.
+
+### No.1 NN model
+The parameters are layer = c(200,200), activation function = "Rectifier", epochs = 100, rate = 0.01, rate_annealing = 1e-05, momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9.
+```{r,include=FALSE}
+time_NN1 = system.time({
+  model_NN1 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, validation_frame = dx_valid,
+            activation = "Rectifier", hidden = c(200,200), 
+            adaptive_rate = FALSE, rate = 0.01, rate_annealing = 1e-05, 
+            momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9,
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0, seed = 123, reproducible = TRUE) 
+})
+```
+
+```{r,echo=FALSE}
+perf = h2o.performance(model_NN1,newdata = dx_test)
+plot(perf)
+h2o.confusionMatrix(perf,metrics = "f2")
+```
+
+The test auc:
+```{r, echo=FALSE}
+auc_NN1 = h2o.auc(perf)
+auc_NN1
+```
+
+The run time:
+```{r, echo=FALSE}
+time_NN1[3]
+```
+
+
+### No.2 NN model (changing into 3 layer, each with 50 neurons, keeping other constant)
+The parameters are layer = c(50,50,50), activation function = "Rectifier", epochs = 100, rate = 0.01, rate_annealing = 1e-05, momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9.
+```{r,include=FALSE}
+time_NN2 = system.time({
+  model_NN2 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, validation_frame = dx_valid,
+            activation = "Rectifier", hidden = c(50,50,50), 
+            adaptive_rate = FALSE, rate = 0.01, rate_annealing = 1e-05, 
+            momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9,
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0, seed = 123, reproducible = TRUE) 
+})
+```
+
+```{r,echo=FALSE}
+perf = h2o.performance(model_NN2,newdata = dx_test)
+plot(perf)
+h2o.confusionMatrix(perf,metrics = "f2")
+```
+
+The test auc:
+```{r, echo=FALSE}
+auc_NN2 = h2o.auc(perf)
+auc_NN2
+```
+
+The run time:
+```{r, echo=FALSE}
+time_NN2[3]
+```
+It looks like changing the layer from 200,200 to 50,50,50 make it worse on the error rate and test auc.
+
+### No.3 NN model (Same as No.2 except changing layer to 3 layers with 200 neurons each)
+The parameters are layer = c(200,200,200), activation function = "Rectifier", epochs = 100, rate = 0.01, rate_annealing = 1e-05, momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9.
+```{r,include=FALSE}
+time_NN3 = system.time({
+  model_NN3 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, validation_frame = dx_valid,
+            activation = "Rectifier", hidden = c(200,200,200), 
+            adaptive_rate = FALSE, rate = 0.01, rate_annealing = 1e-05, 
+            momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9,
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0, seed = 123, reproducible = TRUE) 
+})
+```
+
+```{r,echo=FALSE}
+perf = h2o.performance(model_NN3,newdata = dx_test)
+plot(perf)
+h2o.confusionMatrix(perf,metrics = "f2")
+```
+
+The test auc:
+```{r, echo=FALSE}
+auc_NN3 = h2o.auc(perf)
+auc_NN3
+```
+
+The run time:
+```{r, echo=FALSE}
+time_NN3[3]
+```
+
+This model is better than the first one with higher auc. More layers may result in a better model.
+
+### No.4 NN model (Same as No.1 except changing activation function to "Tanh")
+The parameters are layer = c(200,200), activation function = "Tanh", epochs = 100, rate = 0.01, rate_annealing = 1e-05, momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9.
+```{r,include=FALSE}
+time_NN4 = system.time({
+  model_NN4 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, validation_frame = dx_valid,
+            activation = "Tanh", hidden = c(200,200), 
+            adaptive_rate = FALSE, rate = 0.01, rate_annealing = 1e-05, 
+            momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9,
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0, seed = 123, reproducible = TRUE) 
+})
+```
+
+```{r,echo=FALSE}
+perf = h2o.performance(model_NN4,newdata = dx_test)
+plot(perf)
+h2o.confusionMatrix(perf,metrics = "f2")
+```
+
+The test auc:
+```{r, echo=FALSE}
+auc_NN4 = h2o.auc(perf)
+auc_NN4
+```
+The run time:
+```{r, echo=FALSE}
+time_NN4[3]
+```
+
+
+### No.5 NN model (Same as No.1 except changing adaptive learning rate to TRUE, which makes momentum not applicable)
+The parameters are layer = c(200,200), activation function = "Rectifier", epochs = 100.
+```{r,include=FALSE}
+time_NN5 = system.time({
+  model_NN5 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, validation_frame = dx_valid,
+            activation = "Rectifier", hidden = c(200,200), 
+            adaptive_rate = TRUE, 
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0, seed = 123, reproducible = TRUE) 
+})
+```
+
+```{r,echo=FALSE}
+perf = h2o.performance(model_NN5,newdata = dx_test)
+plot(perf)
+h2o.confusionMatrix(perf,metrics = "f2")
+```
+
+The test auc:
+```{r, echo=FALSE}
+auc_NN5 = h2o.auc(perf)
+auc_NN5
+```
+The run time:
+```{r, echo=FALSE}
+time_NN5[3]
+```
+
+### No.6 NN model (4 layer 50 neurons each, regulization, drop out ratio)
+Turns out that No.2 NN model performed well, so for this model I used the settings as used in No.2 NN model, with adaptive rate = TRUE, and one more layer: 4 hidden layers with 50 neurons each. 
+
+Add input dropout ratio = 0.2, and l1, l2 regulization as l1 = 2e-5, l2 = 2e-5.
+
+Add hidden dropout ratios = c(0.2,0.2,0.2,0.2)
+
+Since the deep learning is like the black magic, I add a lot of stuff in.
+```{r,include=FALSE}
+time_NN6 = system.time({
+  model_NN6 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, validation_frame = dx_valid,
+            activation = "RectifierWithDropout", hidden = c(50,50,50,50), 
+            l1 = 2e-5, l2 = 2e-5, hidden_dropout_ratios = c(0.2,0.2,0.2,0.2),
+            adaptive_rate = TRUE, input_dropout_ratio = 0.2,
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0,               seed = 123,reproducible = TRUE) 
+})
+```
+
+```{r,echo=FALSE}
+perf = h2o.performance(model_NN6,newdata = dx_test)
+plot(perf)
+h2o.confusionMatrix(perf,metrics = "f2")
+```
+
+The test auc:
+```{r, echo=FALSE}
+auc_NN6 = h2o.auc(perf)
+auc_NN6
+```
+The run time:
+```{r, echo=FALSE}
+time_NN5[3]
+```
+
+
+
+
+### Discussion on the neural network models
+A graphic presentation of those neural network models, AUC vs Time(in seconds):
+```{r, echo=FALSE}
+TIME = c(time_NN1[3],time_NN2[3],time_NN3[3],time_NN4[3],time_NN5[3],time_NN6[3])
+TIME = as.numeric(TIME)
+model_name = c("NN1","NN2","NN3","NN4","NN5","NN6")
+AUC = c(auc_NN1,auc_NN2,auc_NN3,auc_NN4,auc_NN5,auc_NN6)
+df = data.frame(model_name,AUC,TIME)
+qplot(TIME, AUC, data = df,color = model_name) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+It's interesting to observe that the AUCs for the test data on all neural network models are bigger than 0.9, which is an indictor for a good model. 
+
+The general trend is that if the model have more layers, more neurons it can achieve higher auc but takes more time. The trade off between AUC and run time is an important instance to observe but taking more time doesn't improve AUC a lot, as No.4 neural network model takes as twice as much time compared to the No.3 model, but it has less AUC after all.
+
+It turns out that tanh is not a good activation for this data comparing to Rectifer, as it took the longest time but the AUC is not very high considering the time it took.
+
+No.2 model turns out to have less time and considerablely high auc, while the auc didn't change a lot among those cases. So I assume No.2 is the best Neural network model among those six.
+
+
+## 2.5 Ensembling various models
+In this section various models will be combined. I will choose the logistic regression model, the random forest, the best GBM model, and No.2 Neural Network model, which means that I will keep the parameter for those models.
+
+As the stackedEnsembel function in h2o requires cross validation rather than a validation frame, a training set with 75% data and a test set with 25% data will be created.
+```{r, echo = FALSE}
+dx_split = h2o.splitFrame(dx, ratios = 0.75, seed = 12)
+dx_train = dx_split[[1]]
+dx_test = dx_split[[2]]
+```
+
+4 models with different algorithm will be created with cross-validation within training data and the nfolds for each data is 5.
+
+```{r, include = FALSE}
+time_ES = system.time({
+Emodel_logit = h2o.glm(Xnames, "income", training_frame = dx_train, 
+                       alpha = 1, lambda_search = TRUE, nfolds = 5, 
+                       family = "binomial", seed = 12, 
+                       fold_assignment = "Modulo", 
+                       keep_cross_validation_predictions = TRUE)
+
+Emodel_RF = h2o.randomForest(x = Xnames, y = "income", training_frame = dx_train, 
+                         nfolds = 5, stopping_metric = "AUC", 
+                         stopping_rounds = 4, stopping_tolerance = 0.01, ntrees = 500, seed = 12,
+                         fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE)
+
+Emodel_GBM3 = h2o.gbm(x = Xnames, y = "income", training_frame = dx_train, 
+                 nfolds = 5, distribution = "bernoulli", 
+                ntrees = 600, max_depth = 100, learn_rate = 0.3, nbins = 100, seed = 12, 
+                stopping_metric = "AUC", stopping_rounds = 3, stopping_tolerance = 0.01,
+                fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE)
+
+Emodel_NN2 = h2o.deeplearning(x = Xnames, y = "income", training_frame = dx_train, 
+            activation = "Rectifier", hidden = c(50,50,50), 
+            adaptive_rate = FALSE, rate = 0.01, rate_annealing = 1e-05, 
+            momentum_start = 0.5, momentum_ramp = 1e4, momentum_stable = 0.9,
+            epochs = 100, stopping_rounds = 2, stopping_metric = "AUC", stopping_tolerance = 0,       
+            nfolds = 5, seed = 123, reproducible = TRUE,
+            fold_assignment = "Modulo", keep_cross_validation_predictions = TRUE) 
+
+model_ENS = h2o.stackedEnsemble(x = Xnames, y = "income", 
+                                training_frame = dx_train, 
+                                validation_frame = dx_valid,
+                    base_models = list(Emodel_logit@model_id, 
+                                       Emodel_GBM3@model_id,      
+                                       Emodel_RF@model_id,
+                                       Emodel_NN2@model_id))
+})
+
+```
+
+The ROC curve for the new model on 25% test data is given by:
+
+```{r,echo = FALSE}
+perf = h2o.performance(model_ENS, newdata = dx_test)
+plot(perf)
+```
+
+And the test AUC on the test data is given by:
+```{r,echo = FALSE}
+auc_ENS = h2o.auc(perf)
+auc_ENS
+```
+
+
+
+# 3. Final Discussion
+## 3.1 Comparison between different algorithms
+The plot will be presented about the AUC for different algorithm, and for multiple models with same algorithm, they will be assigned same color.
+
+```{r, echo= FALSE, message=FALSE}
+model_name = c("LOG", "RF", "GBM","GBM","GBM","GBM","NN","NN","NN","NN","NN","NN")
+AUC = c(auc_logit,auc_RF,auc_GBM1,auc_GBM2,auc_GBM3,auc_GBMbest,auc_NN1,auc_NN2,auc_NN3,auc_NN4,auc_NN5,auc_NN6)
+qplot(AUC, fill = model_name)
+```
+
+As for those algorithms, the neural network trends to have stable higher AUC, while with hyperparameter random search, GBM takes the first place. This is worth to notice that the hyperparameter optimization is amazing to achieve better model.
+
+However, the AUC range is from 0.87 to 0.92 as the graph above shows. So that AUC doesn't really change a lot and if it takes 10 times to make a 0.01 progress, we'd better don't do it.
+
+## 3.2 The cost-benefit analysis(Time vs AUC)
+The time vs auc plot is presented for different model, the mixed model is presented as well.
+
+
+```{r,echo = FALSE}
+model_name = c("LOG", "RF", "GBM","GBM","GBM","GBM","NN","NN","NN","NN","NN","NN", "MIX")
+AUC = c(auc_logit,auc_RF,auc_GBM1,auc_GBM2,auc_GBM3,auc_GBMbest,auc_NN1,auc_NN2,auc_NN3,auc_NN4,auc_NN5,auc_NN6, auc_ENS)
+TIME = c(time_logit[3],time_RF[3],time_GBM1[3],time_GBM2[3],time_GBM3[3],time_RandomSearch[3],time_NN1[3],time_NN2[3],time_NN3[3],time_NN4[3],time_NN5[3],time_NN6[3], time_ES[3])
+df = data.frame(AUC, TIME, model_name)
+qplot(TIME, AUC, color = model_name, data = df)
+```
+
+
+This plot gives a nice idea about the time cost against the auc as a metric of the goodness.
+
+The trend shows that with more time, it's possible to achieve better AUC on test data set. However, the change is not dramatic, only from 0.91 to 0.92, and this movement takes more than 150 seconds. So we definitely don't want to do that.
+
+The plot below will show exact name of the model:
+
+```{r,echo= FALSE}
+model_name = c("LOG", "RF", "GBM1","GBM2","GBM3","GBM_HPS","NN1","NN2","NN3","NN4","NN5","NN6", "MIX")
+AUC = c(auc_logit,auc_RF,auc_GBM1,auc_GBM2,auc_GBM3,auc_GBMbest,auc_NN1,auc_NN2,auc_NN3,auc_NN4,auc_NN5,auc_NN6, auc_ENS)
+TIME = c(time_logit[3],time_RF[3],time_GBM1[3],time_GBM2[3],time_GBM3[3],time_RandomSearch[3],time_NN1[3],time_NN2[3],time_NN3[3],time_NN4[3],time_NN5[3],time_NN6[3], time_ES[3])
+df = data.frame(AUC, TIME, model_name)
+qplot(TIME, AUC, color = model_name, data = df)
+```
+
+
+It turns out the No.2 neural network model is the best, with really fast speed:
+```{r,echo=FALSE}
+time_NN2[3]
+```
+
+And relatively high auc:
+```{r, echo=FALSE}
+auc_NN2
+```
+And the rank of this auc in all the models is:
+```{r,echo=FALSE}
+temp = sort(df$AUC, decreasing = TRUE)
+which(temp == auc_NN2)
+```
+
+I really like this model and consider this model as my predictive model for this data. High speed and top 5 auc. 
+
+This should be the best one among those.
+
+More inspection can be checked on h2o.flow, as well as picking an optimal cut off point based on different criterias.
+
+The whole project was built on Amazon EC2 with big memory, for the hyperparameter tuning ate up all 8 Gb once, and the 8 cores machine made life easier for my PC, also saved a lot of time.
+
+Further modification comming some, some criteria might be included, such as hyperparameter tuning on neural network models.
+
+
+
+
+
+
+
+
